@@ -70,20 +70,21 @@ class Attention(nn.Module):
         key: Float[Array, "bs seq_len_k d_model"],
         value: Float[Array, "bs seq_len_v d_model"],
     ) -> Float[Array, "bs seq_len_q d_v"]:
+
         wq = self.param(
-            "query",
+            "wq",
             lambda rng: jax.random.normal(
                 rng, (self.config.d_model, self.config.n_q_heads * self.config.d_k)
             ),
         )
         wk = self.param(
-            "key",
+            "wk",
             lambda rng: jax.random.normal(
                 rng, (self.config.d_model, self.config.n_kv_heads * self.config.d_k)
             ),
         )
         wv = self.param(
-            "value",
+            "wv",
             lambda rng: jax.random.normal(
                 rng, (self.config.d_model, self.config.n_kv_heads * self.config.d_v)
             ),

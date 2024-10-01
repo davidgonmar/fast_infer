@@ -1,7 +1,7 @@
 import pytest
 import jax
 import jax.numpy as jnp
-from fast_infer.models.llama import LlamaDecoderLayerConfig, LlamaModel
+from fast_infer.models.llama import LlamaConfig, LlamaModel
 from fast_infer.generic import Activation
 
 
@@ -16,7 +16,7 @@ from fast_infer.generic import Activation
 def test_llama_model_different_params(
     n_q_heads, n_kv_heads, d_model, hidden_dim, output_dim, num_layers
 ):
-    config = LlamaDecoderLayerConfig(
+    config = LlamaConfig(
         n_q_heads=n_q_heads,
         n_kv_heads=n_kv_heads,
         d_model=d_model,
