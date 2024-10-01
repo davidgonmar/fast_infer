@@ -21,7 +21,9 @@ def rotate_half(x: Float[Array, "b s d"]) -> Float[Array, "b s d"]:
     return jnp.stack([-x2, x1], axis=-1).reshape(x.shape)
 
 
-def create_rope_freqs(max_seq_len: int, d_model: int) -> RoPEParams:
+def create_rope_freqs(
+    max_seq_len: int, d_model: int
+) -> Float[Array, "seq_len d_model"]:
     dims = jnp.arange(d_model // 2)
     seq_lens = jnp.arange(max_seq_len)
     freqs = 1 / jnp.power(10000, 2 * dims / d_model)

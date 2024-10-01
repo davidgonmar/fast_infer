@@ -3,15 +3,11 @@ from jaxtyping import Array, Float
 import jax
 import flax.linen as nn
 import dataclasses
-from enum import Enum
+from fast_infer.generic import Activation
+import fast_infer.utils as utils
 
 
-class Activation(Enum):
-    RELU = "relu"
-    GELU = "gelu"
-
-
-@dataclasses.dataclass
+@utils.auto_init_dataclass
 class MLPConfig:
     d_model: int
     hidden_dim: int

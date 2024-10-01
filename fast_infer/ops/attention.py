@@ -3,9 +3,10 @@ from jaxtyping import Array, Float
 import jax
 import dataclasses
 import flax.linen as nn
+import fast_infer.utils as utils
 
 
-@dataclasses.dataclass
+@utils.auto_init_dataclass
 class AttentionConfig:
     # heads (grouped-query-attention, multi-head-attention or regular)
     n_q_heads: int
@@ -69,10 +70,30 @@ class Attention(nn.Module):
         key: Float[Array, "bs seq_len_k d_model"],
         value: Float[Array, "bs seq_len_v d_model"],
     ) -> Float[Array, "bs seq_len_q d_v"]:
-        wq = self.param("query", lambda rng, shape: jax.random.normal(rng, shape))
-        wk = self.param("key", lambda rng, shape: jax.random.normal(rng, shape))
-        wv = self.param("value", lambda rng, shape: jax.random.normal(rng, shape))
-        wo = self.param("wo", lambda rng, shape: jax.random.normal(rng, shape))
+        wq = self.param(
+            "query",
+            lambda rng: jax.random.normal(
+                rng, (self.config.d_model, self.config.n_q_heads * self.config.d_k)
+            ),
+        )
+        wk = self.param(
+            "key",
+            lambda rng: jax.random.normal(
+                rng, (self.config.d_model, self.config.n_kv_heads * self.config.d_k)
+            ),
+        )
+        wv = self.param(
+            "value",
+            lambda rng: jax.random.normal(
+                rng, (self.config.d_model, self.config.n_kv_heads * self.config.d_v)
+            ),
+        )
+        wo = self.param(
+            "wo",
+            lambda rng: jax.random.normal(
+                rng, (self.config.n_kv_heads * self.config.d_v, self.config.d_model)
+            ),
+        )
 
         params = AttentionParams(query=wq, key=wk, value=wv, wo=wo)
         return scaled_dot_product_attention(query, key, value, params, self.config)
