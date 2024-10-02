@@ -65,6 +65,7 @@ class LlamaModel(nn.Module):
         )(x)
         for _ in range(self.config.n_layers):
             x = LlamaDecoderLayer(config=self.config)(x, mask)
+            print(x.shape)
         x = nn.RMSNorm()(x)
         # lm head
         whead = self.param(

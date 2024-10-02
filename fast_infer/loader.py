@@ -145,9 +145,9 @@ def llama(model_name):
 if __name__ == "__main__":
     model, tok, params = llama("amd/AMD-Llama-135m")
 
-    inptoks = tok("Hello, my name is")
+    inptoks = tok("Hello, my name is wasaaaa")
     print(inptoks)
-    inp = jnp.array(inptoks["input_ids"])
+    inp = jnp.array(inptoks["input_ids"]).reshape(1, -1)
     res = model.apply(
         params, inp, jnp.ones((1, len(inptoks["input_ids"]), len(inptoks["input_ids"])))
     )

@@ -32,6 +32,9 @@ def scaled_dot_product_attention(
     params: AttentionParams,
     config: AttentionConfig,
 ) -> Float[Array, "bs seq_len_q d_v"]:
+    print("config", config)
+    print("querty shape", query.shape)
+
     bs, seq_len = query.shape[0], query.shape[1]
     query = (
         (query @ params.query)
