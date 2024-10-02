@@ -39,10 +39,10 @@ def llama_key_converter(hf_dot_string: str) -> str:
     res = res.replace("self_attn.k_proj.weight", "Attention_0.wk")
     res = res.replace("self_attn.v_proj.weight", "Attention_0.wv")
     res = res.replace("self_attn.o_proj.weight", "Attention_0.wo")
-    res = res.replace("mlp.gate_proj.weight", "MLP_0.w1")
-    res = res.replace("mlp.up_proj.weight", "MLP_0.w2")
+    res = res.replace("mlp.gate_proj.weight", "MLP_0.gate_proj")
+    res = res.replace("mlp.up_proj.weight", "MLP_0.up_proj")
     res = res.replace(
-        "mlp.down_proj.weight", "MLP_0.w1"
+        "mlp.down_proj.weight", "MLP_0.down_proj"
     )  # Assuming this was meant to be MLP_0.w2 instead of w1
     res = res.replace("input_layernorm.weight", "LayerNorm_0.scale")
     res = res.replace("input_layernorm.bias", "LayerNorm_0.bias")
@@ -85,7 +85,7 @@ def assign_dict(src, dst):
             # srcshould be torch tensor
             assert isinstance(v, torch.Tensor)
             # shapes, dtypes, must match
-            if k == "lm_head":
+            if k == "lm_head" or "gate_proj" in k or "up_proj" in k or "down_proj" in k:
                 v = v.T  # Transpose the tensor
             assert (
                 dst[k].shape == v.shape
@@ -142,6 +142,37 @@ def llama(model_name):
     return imodel, tokenizer, {"params": state_dict}
 
 
+class Sampler:
+    def __init__(self, model, params, tok):
+        self.model = model
+        # jit model
+        self.params = params
+        self.tok = tok
+
+    def sample(self, prompt, max_len=100):
+        inptoks = self.tok(prompt)
+        inp = jnp.array(inptoks["input_ids"]).reshape(1, -1)
+        end_token = self.tok.eos_token_id
+        for _ in range(max_len):
+            causal_mask = jnp.ones(
+                (1, inp.shape[1], inp.shape[1])
+            )  # 1, seq_len, seq_len
+            # need to make causal
+            causal_mask = jnp.tril(causal_mask)
+            res = self.model.apply(
+                self.params,
+                inp,
+                causal_mask,
+            )
+            next_token = jnp.argmax(res[0, -1, :])
+            inp = jnp.concatenate([inp, next_token.reshape(1, 1)], axis=1)
+
+            if next_token == end_token:
+                break
+
+        return self.tok.decode(inp[0])
+
+
 if __name__ == "__main__":
     model, tok, params = llama("amd/AMD-Llama-135m")
 
@@ -152,4 +183,6 @@ if __name__ == "__main__":
         params, inp, jnp.ones((1, len(inptoks["input_ids"]), len(inptoks["input_ids"])))
     )
 
-    print(res)
+    sampler = Sampler(model, params, tok)
+
+    print(sampler.sample("Hello, my name is wasaaaa", 30))

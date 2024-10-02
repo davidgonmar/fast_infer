@@ -11,28 +11,28 @@ import fast_infer.utils as utils
 class MLPConfig:
     d_model: int
     hidden_dim: int
-    output_dim: int
     activation: Activation
 
 
 @dataclasses.dataclass
 class MLPParams:
-    w1: Float[Array, "d_model hidden_dim"]
-    w2: Float[Array, "hidden_dim output_dim"]
+    gate_proj: Float[Array, "hidden_dim intermediate_size"]
+    up_proj: Float[Array, "hidden_dim intermediate_size"]
+    down_proj: Float[Array, "intermediate_size hidden_dim"]
 
 
 def mlp_forward(
     x: Float[Array, "bs d_model"], params: MLPParams, config: MLPConfig
 ) -> Float[Array, "bs output_dim"]:
-    h = jnp.dot(x, params.w1)
+    h = jnp.dot(x, params.gate_proj)
     if config.activation == Activation.RELU:
         h = jax.nn.relu(h)
     elif config.activation == Activation.GELU:
         h = jax.nn.gelu(h)
     elif config.activation == Activation.SILU:
         h = jax.nn.silu(h)
-    output = jnp.dot(h, params.w2)
-    return output
+    output = jnp.dot(x, params.up_proj) * h
+    return jnp.dot(output, params.down_proj)
 
 
 class MLP(nn.Module):
@@ -40,16 +40,23 @@ class MLP(nn.Module):
 
     @nn.compact
     def __call__(self, x: Float[Array, "bs d_model"]) -> Float[Array, "bs output_dim"]:
-        w1 = self.param(
-            "w1",
-            lambda rng, shape: jax.random.normal(rng, shape),
+        gate_proj = self.param(
+            "gate_proj",
+            lambda rng, shape: nn.initializers.xavier_uniform()(rng, shape),
             (self.config.d_model, self.config.hidden_dim),
         )
-        w2 = self.param(
-            "w2",
-            lambda rng, shape: jax.random.normal(rng, shape),
-            (self.config.hidden_dim, self.config.output_dim),
+        up_proj = self.param(
+            "up_proj",
+            lambda rng, shape: nn.initializers.xavier_uniform()(rng, shape),
+            (self.config.d_model, self.config.hidden_dim),
         )
-
-        params = MLPParams(w1=w1, w2=w2)
-        return mlp_forward(x, params, self.config)
+        down_proj = self.param(
+            "down_proj",
+            lambda rng, shape: nn.initializers.xavier_uniform()(rng, shape),
+            (self.config.hidden_dim, self.config.d_model),
+        )
+        return mlp_forward(
+            x,
+            MLPParams(gate_proj=gate_proj, up_proj=up_proj, down_proj=down_proj),
+            self.config,
+        )

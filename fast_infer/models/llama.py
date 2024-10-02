@@ -38,7 +38,7 @@ class LlamaDecoderLayer(nn.Module):
             x = nn.LayerNorm()(x)
         residual = x
         x = nn.LayerNorm()(x)
-        x = Attention(config=AttentionConfig(**self.config.to_dict()))(x, x, x)
+        x = Attention(config=AttentionConfig(**self.config.to_dict()))(x, x, x, mask)
         x = residual + x
         residual = x
         x = nn.LayerNorm()(x)
@@ -65,7 +65,6 @@ class LlamaModel(nn.Module):
         )(x)
         for _ in range(self.config.n_layers):
             x = LlamaDecoderLayer(config=self.config)(x, mask)
-            print(x.shape)
         x = nn.RMSNorm()(x)
         # lm head
         whead = self.param(
