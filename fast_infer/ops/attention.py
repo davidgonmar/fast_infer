@@ -63,9 +63,9 @@ def scaled_dot_product_attention(
     )([query, key])
 
     raw_scores = query @ key.transpose((0, 1, 3, 2)) / scale
-    masked = raw_scores - 1e9 * mask.reshape(
-        bs, 1, seq_len, seq_len
-    )  # broadcast mask accross heads
+    masked = jnp.where(
+        mask.reshape(bs, 1, seq_len, seq_len), raw_scores, -1e9
+    )  # (bs, n_q_heads, seq_len_q, seq_len_k)
 
     attention_weights = jax.nn.softmax(
         masked, axis=-1

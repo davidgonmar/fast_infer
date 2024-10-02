@@ -34,19 +34,16 @@ class LlamaDecoderLayer(nn.Module):
         x: Float[Array, "bs seq_len d_model"],
         mask: Float[Array, "bs seq_len seq_len"],
     ) -> Float[Array, "bs seq_len d_model"]:
-        if self.config.pre_attention_layernorm:
-            x = nn.LayerNorm()(x)
         residual = x
-        x = nn.LayerNorm()(x)
+        if self.config.pre_attention_layernorm:
+            x = nn.RMSNorm()(x)
         x = Attention(config=AttentionConfig(**self.config.to_dict()))(x, x, x, mask)
         x = residual + x
         residual = x
-        x = nn.LayerNorm()(x)
+        if self.config.post_attention_layernorm:
+            x = nn.RMSNorm()(x)
         x = MLP(config=MLPConfig(**self.config.to_dict()))(x)
         x = residual + x
-
-        if self.config.post_attention_layernorm:
-            x = nn.LayerNorm()(x)
         return x
 
 

@@ -44,10 +44,10 @@ def llama_key_converter(hf_dot_string: str) -> str:
     res = res.replace(
         "mlp.down_proj.weight", "MLP_0.down_proj"
     )  # Assuming this was meant to be MLP_0.w2 instead of w1
-    res = res.replace("input_layernorm.weight", "LayerNorm_0.scale")
-    res = res.replace("input_layernorm.bias", "LayerNorm_0.bias")
-    res = res.replace("post_attention_layernorm.weight", "LayerNorm_1.scale")
-    res = res.replace("post_attention_layernorm.bias", "LayerNorm_1.bias")
+    res = res.replace("input_layernorm.weight", "RMSNorm_0.scale")
+    res = res.replace("input_layernorm.bias", "RMSNorm_0.bias")
+    res = res.replace("post_attention_layernorm.weight", "RMSNorm_1.scale")
+    res = res.replace("post_attention_layernorm.bias", "RMSNorm_1.bias")
 
     # embeds
     res = res.replace("model.embed_tokens.weight", "Embed_0.embedding")
