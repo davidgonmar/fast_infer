@@ -18,13 +18,14 @@ class RoPEParams:
 class RoPEConfig:
     max_seq_len: int
     head_dim: int
+    has_groups_dim: bool = False
 
 
 def rotate_half(x: Float[Array, "b s d"]) -> Float[Array, "b s d"]:
     # This is not the original rope impl, but is what works for huggingface's llama (TODO -- investigate why they do this)
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
-    return jnp.stack([-x2, x1], axis=-1).transpose(0, 1, 2, 4, 3).reshape(x.shape)
+    return jnp.swapaxes(jnp.stack([-x2, x1], axis=-1), -1, -2).reshape(x.shape)
 
 
 def create_rope_freqs(
@@ -42,12 +43,14 @@ def create_rope_freqs(
 def rope(
     x: Float[Array, "bs heads seq_len d_model"], params: RoPEParams, config: RoPEConfig
 ) -> Float[Array, "bs heads seq_len_q d_v"]:
-    seq_len = x.shape[2]
+    seq_len = x.shape[2] if not config.has_groups_dim else x.shape[3]
     freq_cos, freq_sin = jnp.cos(params.freqs), jnp.sin(params.freqs)
     freq_cos, freq_sin = (
         freq_cos[None, None, :seq_len, :],
         freq_sin[None, None, :seq_len, :],
     )
+    if config.has_groups_dim:
+        freq_cos, freq_sin = freq_cos[None, ...], freq_sin[None, ...]
     return x * freq_cos + rotate_half(x) * freq_sin
 
 

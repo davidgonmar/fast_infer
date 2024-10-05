@@ -40,6 +40,7 @@ def scaled_dot_product_attention(
     config: AttentionConfig,
 ) -> Float[Array, "bs seq_len_q d_v"]:
     bs, seq_len = query.shape[0], query.shape[1]
+    n_groups = config.n_q_heads // config.n_kv_heads
     query = (
         (query @ params.query)
         .reshape(bs, seq_len, config.n_q_heads, -1)
@@ -47,25 +48,30 @@ def scaled_dot_product_attention(
     )  # (bs, n_q_heads, seq_len_q, d_k)
     key = (
         (key @ params.key)
-        .reshape(bs, seq_len, config.n_kv_heads, -1)
+        .reshape(bs, seq_len, config.n_kv_heads, 1, -1)
+        .repeat(n_groups, axis=3)
+        .reshape(bs, seq_len, config.n_q_heads, -1)
         .transpose((0, 2, 1, 3))
-    )  # (bs, n_kv_heads, seq_len_k, d_k)
+    )  # (bs, n_q_heads, seq_len_k, d_k)
     value = (
         (value @ params.value)
-        .reshape(bs, seq_len, config.n_kv_heads, -1)
+        .reshape(bs, seq_len, config.n_kv_heads, 1, -1)
+        .repeat(n_groups, axis=3)
+        .reshape(bs, seq_len, config.n_q_heads, -1)
         .transpose((0, 2, 1, 3))
-    )  # (bs, n_kv_heads, seq_len_v, d_v)
+    )  # (bs, n_q_heads, seq_len_v, d_v)
     dk = query.shape[-1]
     scale = config.scale or jnp.sqrt(dk)
 
     query, key = pos_embedding_kind_to_fn[config.pos_embedding](
-        RoPEConfig(**{"max_seq_len": 1024, "head_dim": dk})
+        RoPEConfig(**{"max_seq_len": 1024, "head_dim": dk, "has_groups_dim": False})
     )([query, key])
 
-    raw_scores = query @ key.transpose((0, 1, 3, 2)) / scale
-    masked = jnp.where(
-        mask.reshape(bs, 1, seq_len, seq_len), raw_scores, -1e9
+    raw_scores = (
+        query @ key.swapaxes(-1, -2) / scale
     )  # (bs, n_q_heads, seq_len_q, seq_len_k)
+    assert mask.shape == (bs, seq_len, seq_len)
+    masked = raw_scores + mask[:, None, :, :]
 
     attention_weights = jax.nn.softmax(
         masked, axis=-1
@@ -73,7 +79,7 @@ def scaled_dot_product_attention(
     output = attention_weights @ value  # (bs, n_q_heads, seq_len_q, d_v)
     output = output.transpose((0, 2, 1, 3)).reshape(
         bs, seq_len, -1
-    )  # (bs, seq_len_q, d_v)
+    )  # (bs, seq_len_q, n_q_heads * d_v)
     return output @ params.wo  # (bs, seq_len_q, d_model)
 
 
@@ -110,7 +116,7 @@ class Attention(nn.Module):
         wo = self.param(
             "wo",
             lambda rng: jax.random.normal(
-                rng, (self.config.n_kv_heads * self.config.d_v, self.config.d_model)
+                rng, (self.config.n_q_heads * self.config.d_v, self.config.d_model)
             ),
         )
 

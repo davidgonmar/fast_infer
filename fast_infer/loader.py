@@ -75,6 +75,10 @@ def _torch_to_jax_dtype(dtype: torch.dtype) -> jnp.dtype:
         raise ValueError(f"Unsupported dtype: {dtype}")
 
 
+def _substr(key, li):
+    return any(map(lambda x: x in key, li))
+
+
 def assign_dict(src, dst, strict=True):
     # make sure everything is assigned
     assigned_keys = set()
@@ -89,7 +93,9 @@ def assign_dict(src, dst, strict=True):
             # srcshould be torch tensor
             assert isinstance(v, torch.Tensor)
             # shapes, dtypes, must match
-            if k == "lm_head" or "gate_proj" in k or "up_proj" in k or "down_proj" in k:
+            if k == "lm_head" or _substr(
+                k, ["gate_proj", "up_proj", "down_proj", "wq", "wk", "wv", "wo"]
+            ):
                 v = v.T  # Transpose the tensor
             assert (
                 dst[k].shape == v.shape
@@ -139,9 +145,6 @@ def llama(model_name):
     torch_dict_updated = {
         llama_key_converter(k): v for k, v in torch_state_dict.items()
     }
-
-    print(torch_dict_updated.keys())
-    print(params_dict.keys())
     assigned_dict = assign_dict(torch_dict_updated, params_dict)
 
     state_dict = dot_dict_to_nested_keys(assigned_dict)
@@ -152,11 +155,11 @@ def llama(model_name):
 class Sampler:
     def __init__(self, model, params, tok):
         self.model = model
-        # jit model
         self.params = params
         self.tok = tok
 
     def sample(self, prompt, max_len=100):
+        rand = jax.random.PRNGKey(0)
         inptoks = self.tok(prompt)
         inp = jnp.array(inptoks["input_ids"]).reshape(1, -1)
         end_token = self.tok.eos_token_id
@@ -165,31 +168,25 @@ class Sampler:
                 (1, inp.shape[1], inp.shape[1])
             )  # 1, seq_len, seq_len
             # need to make causal
-            causal_mask = jnp.tril(causal_mask)
+            causal_mask = jnp.triu(causal_mask) * -1e9
             res = self.model.apply(
                 self.params,
                 inp,
                 causal_mask,
             )
-            next_token = jnp.argmax(res[0, -1, :])
+            # sample
+            rand, use = jax.random.split(rand)
+            next_token = jax.random.categorical(use, res[:, -1, :].squeeze())
             inp = jnp.concatenate([inp, next_token.reshape(1, 1)], axis=1)
-
+            print(self.tok.decode(inp[0]))
             if next_token == end_token:
+                print("[INFO] Found end token. Stopping.")
                 break
 
         return self.tok.decode(inp[0])
 
 
 if __name__ == "__main__":
-    model, tok, params = llama("amd/AMD-Llama-135m")
-
-    inptoks = tok("Hello, my name is wasaaaa")
-    print(inptoks)
-    inp = jnp.array(inptoks["input_ids"]).reshape(1, -1)
-    res = model.apply(
-        params, inp, jnp.ones((1, len(inptoks["input_ids"]), len(inptoks["input_ids"])))
-    )
-
+    model, tok, params = llama("TinyLlama/TinyLlama_v1.1")
     sampler = Sampler(model, params, tok)
-
-    print(sampler.sample("Hello, my name is wasaaaa", 30))
+    print(sampler.sample("The quick brown fox jumps over the lazy dog."))

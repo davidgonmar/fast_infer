@@ -16,7 +16,6 @@ class LlamaConfig:
     d_v: int
     activation: Activation
     hidden_dim: int
-    output_dim: int
     vocab_size: int
     n_layers: int
     scale: float | None = None
