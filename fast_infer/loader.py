@@ -75,8 +75,12 @@ def _torch_to_jax_dtype(dtype: torch.dtype) -> jnp.dtype:
         raise ValueError(f"Unsupported dtype: {dtype}")
 
 
-def assign_dict(src, dst):
+def assign_dict(src, dst, strict=True):
+    # make sure everything is assigned
+    assigned_keys = set()
     for k, v in src.items():
+        if k in assigned_keys:
+            continue
         if isinstance(v, dict):
             assign_dict(v, dst[k])
         else:
@@ -94,6 +98,9 @@ def assign_dict(src, dst):
                 v.dtype
             ), f"Dtype mismatch: {dst[k].dtype} != {v.dtype} for key {k}"
             dst[k] = _torch_to_jax(v)
+            assigned_keys.add(k)
+    if strict:
+        assert assigned_keys == set(src.keys()), "Keys mismatch!"
     return dst
 
 

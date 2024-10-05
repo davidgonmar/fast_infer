@@ -21,10 +21,10 @@ class RoPEConfig:
 
 
 def rotate_half(x: Float[Array, "b s d"]) -> Float[Array, "b s d"]:
-    x1 = x[..., ::2]
-    x2 = x[..., 1::2]
-    print(x1.shape, x2.shape)
-    return jnp.stack([-x2, x1], axis=-1).reshape(x.shape)
+    # This is not the original rope impl, but is what works for huggingface's llama (TODO -- investigate why they do this)
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return jnp.stack([-x2, x1], axis=-1).transpose(0, 1, 2, 4, 3).reshape(x.shape)
 
 
 def create_rope_freqs(
@@ -33,10 +33,10 @@ def create_rope_freqs(
     d_model = head_dim
     dims = jnp.arange(d_model // 2)
     seq_lens = jnp.arange(max_seq_len)
-    freqs = 1 / jnp.power(10000, 2 * dims / d_model)
+    freqs = 1.0 / jnp.power(10000, 2 * dims / d_model)
     # repeat interleave so freqs is freq1, freq1, freq2, freq2, ...
-    freqs = jnp.repeat(freqs, 2)
-    return jnp.outer(seq_lens, freqs)
+    mat = jnp.outer(seq_lens, freqs)  # (seq_len, d_model // 2)
+    return jnp.concatenate([mat, mat], axis=-1)  # (seq_len, d_model)
 
 
 def rope(
@@ -59,7 +59,7 @@ class RoPE(nn.Module):
         self, xs: list[Float[Array, "bs seq_len d_model"]]
     ) -> list[Float[Array, "bs seq_len d_v"]]:
         freqs = self.param(
-            "freqs",
+            "inv_freqs",
             lambda *args: create_rope_freqs(
                 self.config.max_seq_len, self.config.head_dim
             ),
