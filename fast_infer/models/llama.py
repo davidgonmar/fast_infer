@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 import flax.linen as nn
-from fast_infer.ops.attention import Attention, AttentionConfig
+from fast_infer.ops.attention import Attention, AttentionConfig, AttentionCache
 from fast_infer.ops.mlp import MLP, MLPConfig
 from fast_infer.generic import Activation
 import fast_infer.utils as utils
@@ -32,11 +32,15 @@ class LlamaDecoderLayer(nn.Module):
         self,
         x: Float[Array, "bs seq_len d_model"],
         mask: Float[Array, "bs seq_len seq_len"],
+        cache: AttentionCache | None,
+        curr_seq_pos: int,
     ) -> Float[Array, "bs seq_len d_model"]:
         residual = x
         if self.config.pre_attention_layernorm:
             x = nn.RMSNorm()(x)
-        x = Attention(config=AttentionConfig(**self.config.to_dict()))(x, x, x, mask)
+        x = Attention(config=AttentionConfig(**self.config.to_dict()))(
+            x, x, x, mask, cache, curr_seq_pos
+        )
         x = residual + x
         residual = x
         if self.config.post_attention_layernorm:
@@ -54,13 +58,15 @@ class LlamaModel(nn.Module):
         self,
         x: Float[Array, "bs seq_len d_model"],
         mask: Float[Array, "bs seq_len seq_len"],
+        cache: AttentionCache | None,
+        curr_seq_pos: int,
     ) -> Float[Array, "bs seq_len d_model"]:
         # embedding
         x = nn.Embed(
             num_embeddings=self.config.vocab_size, features=self.config.d_model
         )(x)
         for _ in range(self.config.n_layers):
-            x = LlamaDecoderLayer(config=self.config)(x, mask)
+            x = LlamaDecoderLayer(config=self.config)(x, mask, cache, curr_seq_pos)
         x = nn.RMSNorm()(x)
         # lm head
         whead = self.param(

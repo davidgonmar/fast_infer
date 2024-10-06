@@ -41,13 +41,16 @@ def create_rope_freqs(
 
 
 def rope(
-    x: Float[Array, "bs heads seq_len d_model"], params: RoPEParams, config: RoPEConfig
+    x: Float[Array, "bs heads seq_len d_model"],
+    pos: int,
+    params: RoPEParams,
+    config: RoPEConfig,
 ) -> Float[Array, "bs heads seq_len_q d_v"]:
-    seq_len = x.shape[2] if not config.has_groups_dim else x.shape[3]
+    seq_len = x.shape[2]
     freq_cos, freq_sin = jnp.cos(params.freqs), jnp.sin(params.freqs)
     freq_cos, freq_sin = (
-        freq_cos[None, None, :seq_len, :],
-        freq_sin[None, None, :seq_len, :],
+        freq_cos[None, None, pos : pos + seq_len, :],
+        freq_sin[None, None, pos : pos + seq_len, :],
     )
     if config.has_groups_dim:
         freq_cos, freq_sin = freq_cos[None, ...], freq_sin[None, ...]
@@ -59,7 +62,7 @@ class RoPE(nn.Module):
 
     @nn.compact
     def __call__(
-        self, xs: list[Float[Array, "bs seq_len d_model"]]
+        self, xs: list[Float[Array, "bs seq_len d_model"]], positions: list[int]
     ) -> list[Float[Array, "bs seq_len d_v"]]:
         freqs = self.param(
             "inv_freqs",
@@ -67,7 +70,10 @@ class RoPE(nn.Module):
                 self.config.max_seq_len, self.config.head_dim
             ),
         )
-        return [rope(x, RoPEParams(freqs=freqs), self.config) for x in xs]
+        return [
+            rope(x, pos, RoPEParams(freqs=freqs), self.config)
+            for x, pos in zip(xs, positions)
+        ]
 
 
 pos_embedding_kind_to_fn = {

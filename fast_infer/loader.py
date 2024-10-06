@@ -1,5 +1,6 @@
 from transformers import LlamaForCausalLM, LlamaConfig, AutoTokenizer, AutoConfig
 from fast_infer.models.llama import LlamaConfig, LlamaModel
+from fast_infer.ops.attention import AttentionCache, AttentionConfig
 from fast_infer.generic import Activation
 import jax.numpy as jnp
 import jax
@@ -137,7 +138,7 @@ def llama(model_name):
     # shape of x is (batch_size, seq_len)
     x = jax.random.normal(jax.random.PRNGKey(0), (8, 128)).astype(jnp.int32)
     attn_mask = jnp.ones((8, 128, 128))
-    params = imodel.init(jax.random.PRNGKey(0), x, attn_mask)
+    params = imodel.init(jax.random.PRNGKey(0), x, attn_mask, None, 0)
 
     params_dict = params["params"]
     params_dict = nested_dict_to_dot_keys(params_dict)
@@ -149,44 +150,50 @@ def llama(model_name):
 
     state_dict = dot_dict_to_nested_keys(assigned_dict)
 
-    return imodel, tokenizer, {"params": state_dict}
+    return imodel, tokenizer, {"params": state_dict}, cfg
 
 
 class Sampler:
-    def __init__(self, model, params, tok):
+    def __init__(self, model, params, tok, cfg, use_cache=True):
         self.model = model
         self.params = params
         self.tok = tok
+        self.cache = (
+            AttentionCache(AttentionConfig(**cfg.to_dict())) if use_cache else None
+        )
 
     def sample(self, prompt, max_len=100):
         rand = jax.random.PRNGKey(0)
         inptoks = self.tok(prompt)
         inp = jnp.array(inptoks["input_ids"]).reshape(1, -1)
+        acc = inp
         end_token = self.tok.eos_token_id
-        for _ in range(max_len):
-            causal_mask = jnp.ones(
-                (1, inp.shape[1], inp.shape[1])
-            )  # 1, seq_len, seq_len
-            # need to make causal
-            causal_mask = jnp.triu(causal_mask) * -1e9
+        causal_mask = jnp.ones((1, max_len, max_len))
+        causal_mask = jnp.triu(causal_mask) * -1e9
+        curr_seq_pos = 0
+        for i in range(max_len):
+            print(curr_seq_pos)
             res = self.model.apply(
                 self.params,
-                inp,
+                acc if self.cache is None else inp,
                 causal_mask,
+                self.cache,
+                curr_seq_pos if self.cache is not None else 0,
             )
             # sample
             rand, use = jax.random.split(rand)
             next_token = jax.random.categorical(use, res[:, -1, :].squeeze())
-            inp = jnp.concatenate([inp, next_token.reshape(1, 1)], axis=1)
-            print(self.tok.decode(inp[0]))
+            acc = jnp.concatenate([acc, next_token.reshape(1, 1)], axis=1)
+            inp = next_token.reshape(1, 1)
+            print(self.tok.decode(acc[0]))
             if next_token == end_token:
                 print("[INFO] Found end token. Stopping.")
                 break
-
-        return self.tok.decode(inp[0])
+            curr_seq_pos = acc.shape[1] - 1
+        return self.tok.decode(acc[0])
 
 
 if __name__ == "__main__":
-    model, tok, params = llama("TinyLlama/TinyLlama_v1.1")
-    sampler = Sampler(model, params, tok)
+    model, tok, params, cfg = llama("TinyLlama/TinyLlama_v1.1")
+    sampler = Sampler(model, params, tok, cfg, use_cache=True)
     print(sampler.sample("The quick brown fox jumps over the lazy dog."))
