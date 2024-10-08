@@ -3,6 +3,7 @@ from jaxtyping import Array, Float
 import dataclasses
 import flax.linen as nn
 from enum import Enum
+import jax
 
 
 class PositionEmbeddingKind(Enum):
@@ -48,12 +49,15 @@ def rope(
 ) -> Float[Array, "bs heads seq_len_q d_v"]:
     seq_len = x.shape[2]
     freq_cos, freq_sin = jnp.cos(params.freqs), jnp.sin(params.freqs)
+    # use dynamic slicing instead of the commented out code above
     freq_cos, freq_sin = (
-        freq_cos[None, None, pos : pos + seq_len, :],
-        freq_sin[None, None, pos : pos + seq_len, :],
+        jax.lax.dynamic_slice(freq_cos, (pos, 0), (seq_len, x.shape[-1])),
+        jax.lax.dynamic_slice(freq_sin, (pos, 0), (seq_len, x.shape[-1])),
     )
-    if config.has_groups_dim:
-        freq_cos, freq_sin = freq_cos[None, ...], freq_sin[None, ...]
+    freq_cos, freq_sin = (
+        freq_cos[None, None, ...],
+        freq_sin[None, None, ...],
+    )  # broadcast to batch and heads
     return x * freq_cos + rotate_half(x) * freq_sin
 
 

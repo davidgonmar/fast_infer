@@ -7,6 +7,25 @@ from fast_infer.generic import Activation
 import fast_infer.utils as utils
 
 
+class RMSNorm(nn.Module):
+    dtype: jnp.dtype = jnp.float32
+    epsilon: float = 1e-6
+
+    @nn.compact
+    def __call__(self, hidden_states):
+        variance = jnp.asarray(hidden_states, dtype=jnp.float32)
+        variance = jnp.power(variance, 2)
+        variance = variance.mean(-1, keepdims=True)
+        hidden_states = hidden_states / jnp.sqrt(variance + self.epsilon)
+        weight = self.param(
+            "scale", lambda rng, shape: jnp.ones(shape), hidden_states.shape[-1]
+        )
+        return weight * jnp.asarray(hidden_states, dtype=self.dtype)
+
+
+nn.RMSNorm = RMSNorm
+
+
 @utils.auto_init_dataclass
 class LlamaConfig:
     n_q_heads: int
@@ -52,6 +71,7 @@ class LlamaDecoderLayer(nn.Module):
 
 class LlamaModel(nn.Module):
     config: LlamaConfig
+    lm_head: bool = True
 
     @nn.compact
     def __call__(
@@ -60,18 +80,20 @@ class LlamaModel(nn.Module):
         mask: Float[Array, "bs seq_len seq_len"],
         cache: AttentionCache | None,
         curr_seq_pos: int,
-    ) -> Float[Array, "bs seq_len d_model"]:
+    ):
         # embedding
         x = nn.Embed(
             num_embeddings=self.config.vocab_size, features=self.config.d_model
         )(x)
         for _ in range(self.config.n_layers):
             x = LlamaDecoderLayer(config=self.config)(x, mask, cache, curr_seq_pos)
-        x = nn.RMSNorm()(x)
+        x = nn.RMSNorm(epsilon=1e-6)(x)
+        if not self.lm_head:
+            return x
         # lm head
         whead = self.param(
             "lm_head",
             lambda rng, shape: jnp.zeros(shape),
             (self.config.d_model, self.config.vocab_size),
         )
-        return jnp.dot(x, whead)
+        return jnp.dot(x, whead), cache

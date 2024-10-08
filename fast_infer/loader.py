@@ -42,9 +42,7 @@ def llama_key_converter(hf_dot_string: str) -> str:
     res = res.replace("self_attn.o_proj.weight", "Attention_0.wo")
     res = res.replace("mlp.gate_proj.weight", "MLP_0.gate_proj")
     res = res.replace("mlp.up_proj.weight", "MLP_0.up_proj")
-    res = res.replace(
-        "mlp.down_proj.weight", "MLP_0.down_proj"
-    )  # Assuming this was meant to be MLP_0.w2 instead of w1
+    res = res.replace("mlp.down_proj.weight", "MLP_0.down_proj")
     res = res.replace("input_layernorm.weight", "RMSNorm_0.scale")
     res = res.replace("input_layernorm.bias", "RMSNorm_0.bias")
     res = res.replace("post_attention_layernorm.weight", "RMSNorm_1.scale")
@@ -111,7 +109,7 @@ def assign_dict(src, dst, strict=True):
     return dst
 
 
-def llama(model_name):
+def llama(model_name) -> tuple:
     # returns state dict and tokenizer
     model = LlamaForCausalLM.from_pretrained(model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -154,46 +152,68 @@ def llama(model_name):
 
 
 class Sampler:
-    def __init__(self, model, params, tok, cfg, use_cache=True):
+    def __init__(
+        self, model, params, tok, cfg, max_len, params_dtype=jnp.float16, use_cache=True
+    ):
         self.model = model
         self.params = params
         self.tok = tok
+        layer_names = [f"LlamaDecoderLayer_{i}Attention_0" for i in range(cfg.n_layers)]
         self.cache = (
-            AttentionCache(AttentionConfig(**cfg.to_dict())) if use_cache else None
+            AttentionCache(
+                AttentionConfig(**cfg.to_dict()),
+                layer_names=layer_names,
+                bs=1,
+                max_len=256,
+            )
+            if use_cache
+            else None
+        )
+        self.cfg = cfg
+        self.jitted_apply = jax.jit(self.model.apply)
+        self.max_len = max_len
+        self.params = jax.tree_util.tree_map(
+            lambda x: x.astype(params_dtype), self.params
         )
 
-    def sample(self, prompt, max_len=100):
+    def sample(self, prompt):
+        max_len = self.max_len
         rand = jax.random.PRNGKey(0)
         inptoks = self.tok(prompt)
         inp = jnp.array(inptoks["input_ids"]).reshape(1, -1)
         acc = inp
         end_token = self.tok.eos_token_id
-        causal_mask = jnp.ones((1, max_len, max_len))
-        causal_mask = jnp.triu(causal_mask) * -1e9
-        curr_seq_pos = 0
+        curr_pos = jnp.array(0)
+        causal_mask = jnp.triu(jnp.ones((1, max_len, max_len)) * -1e12, k=1)
         for i in range(max_len):
-            print(curr_seq_pos)
-            res = self.model.apply(
+            res, self.cache = self.jitted_apply(
                 self.params,
                 acc if self.cache is None else inp,
                 causal_mask,
                 self.cache,
-                curr_seq_pos if self.cache is not None else 0,
+                curr_pos if self.cache is not None else 0,
             )
-            # sample
+            res = jax.nn.softmax(res, axis=-1)
             rand, use = jax.random.split(rand)
-            next_token = jax.random.categorical(use, res[:, -1, :].squeeze())
+            next_token = jax.random.choice(use, self.cfg.vocab_size, p=res[0, -1, :])
             acc = jnp.concatenate([acc, next_token.reshape(1, 1)], axis=1)
             inp = next_token.reshape(1, 1)
-            print(self.tok.decode(acc[0]))
             if next_token == end_token:
                 print("[INFO] Found end token. Stopping.")
                 break
-            curr_seq_pos = acc.shape[1] - 1
+            if i == 0:
+                curr_pos = jnp.array(acc.shape[1] - 1)
+            else:
+                curr_pos += 1
+            print(self.tok.decode(acc[0]), end="", flush=True)
         return self.tok.decode(acc[0])
 
 
 if __name__ == "__main__":
-    model, tok, params, cfg = llama("TinyLlama/TinyLlama_v1.1")
-    sampler = Sampler(model, params, tok, cfg, use_cache=True)
-    print(sampler.sample("The quick brown fox jumps over the lazy dog."))
+    prompt = (
+        "Give me a python code snippet to generate a random number between 1 and 100"
+    )
+    formatted_prompt = f"### Human: {prompt} ### Assistant:"
+    model, tok, params, cfg = llama("PY007/TinyLlama-1.1B-Chat-v0.1")
+    sampler = Sampler(model, params, tok, cfg, 1024, use_cache=True)
+    print(sampler.sample(formatted_prompt))

@@ -9,6 +9,7 @@ from fast_infer.ops.position_embeddings import (
     PositionEmbeddingKind,
     RoPEConfig,
 )
+from typing import Any, Tuple
 
 
 @utils.auto_init_dataclass
@@ -24,30 +25,31 @@ class AttentionConfig:
 
 
 class AttentionCache:
-    def __init__(self, config: AttentionConfig):
+    def __init__(self, config: Any, layer_names, bs, max_len):
         self._cfg = config
         self._cache = {}
+
+        for name in layer_names:
+            self._cache[name] = {
+                "key": jnp.zeros((bs, config.n_q_heads, max_len, config.d_k)),
+                "value": jnp.zeros((bs, config.n_q_heads, max_len, config.d_v)),
+            }
 
     def add_kv(
         self,
         layer_name: str,
-        key: Float[Array, "bs head seq_len_k d_model"],
-        value: Float[Array, "bs head seq_len_k d_model"],
+        key: jnp.ndarray,
+        value: jnp.ndarray,
+        curr_seq_pos: jnp.ndarray,
     ):
-        if layer_name not in self._cache:
-            self._cache[layer_name] = {"key": key, "value": value}
-        else:
-            self._cache[layer_name]["key"] = jnp.concatenate(
-                [self._cache[layer_name]["key"], key], axis=2
-            )
-            self._cache[layer_name]["value"] = jnp.concatenate(
-                [self._cache[layer_name]["value"], value], axis=2
-            )
+        self._cache[layer_name]["key"] = jax.lax.dynamic_update_slice(
+            self._cache[layer_name]["key"], key, (0, 0, curr_seq_pos, 0)
+        )
+        self._cache[layer_name]["value"] = jax.lax.dynamic_update_slice(
+            self._cache[layer_name]["value"], value, (0, 0, curr_seq_pos, 0)
+        )
 
-    def get_kv(self, layer_name: str) -> tuple[
-        Float[Array, "bs head seq_len_k d_model"],
-        Float[Array, "bs head seq_len_k d_model"],
-    ]:
+    def get_kv(self, layer_name: str) -> Tuple[jnp.ndarray, jnp.ndarray]:
         assert layer_name in self._cache, "Cache for this layer is empty"
         return self._cache[layer_name]["key"], self._cache[layer_name]["value"]
 
@@ -57,6 +59,39 @@ class AttentionCache:
 
     def reset_all(self):
         self._cache.clear()
+
+    def flatten(self):
+        leaves = []
+        aux_data = {
+            "config": self._cfg,
+            "cache_keys": list(self._cache.keys()),
+            "bs": self._cache[list(self._cache.keys())[0]]["key"].shape[0],
+            "max_len": self._cache[list(self._cache.keys())[0]]["key"].shape[2],
+        }
+        for layer_name in self._cache:
+            leaves.extend(
+                [self._cache[layer_name]["key"], self._cache[layer_name]["value"]]
+            )
+
+        return leaves, aux_data
+
+    @staticmethod
+    def unflatten(aux_data, children):
+        obj = AttentionCache(
+            aux_data["config"],
+            aux_data["cache_keys"],
+            aux_data["bs"],
+            aux_data["max_len"],
+        )
+        it = iter(children)
+        for layer_name in aux_data["cache_keys"]:
+            obj._cache[layer_name] = {"key": next(it), "value": next(it)}
+        return obj
+
+
+jax.tree_util.register_pytree_node(
+    AttentionCache, AttentionCache.flatten, AttentionCache.unflatten
+)
 
 
 @dataclasses.dataclass
@@ -101,24 +136,25 @@ def scaled_dot_product_attention(
     )  # (bs, n_q_heads, seq_len_v, d_v)
 
     dk = query.shape[-1]
-    scale = config.scale or jnp.sqrt(dk)
+    scale = jnp.sqrt(dk)
 
     query, key = pos_embedding_kind_to_fn[config.pos_embedding](
         RoPEConfig(**{"max_seq_len": 1024, "head_dim": dk, "has_groups_dim": False})
     )([query, key], [curr_seq_pos, curr_seq_pos])
 
     if cache is not None:
-        cache.add_kv(layer_name, key, value)
+        cache.add_kv(layer_name, key, value, curr_seq_pos)
         key, value = cache.get_kv(layer_name)
 
     raw_scores = (
         query @ key.swapaxes(-1, -2) / scale
     )  # (bs, n_q_heads, seq_len_q, seq_len_k)
-    masked = (
-        raw_scores
-        + mask[:bs, None, curr_seq_pos : curr_seq_pos + query.shape[2], : key.shape[2]]
-    )
 
+    mask = jax.lax.dynamic_slice(
+        mask, (0, curr_seq_pos, 0), (bs, query.shape[2], key.shape[2])
+    )
+    masked = raw_scores + mask[:, None, :, :]
+    # masked = jnp.where(masked == 0, -1e9, masked)
     attention_weights = jax.nn.softmax(
         masked, axis=-1
     )  # (bs, n_q_heads, seq_len_q, seq_len_k)

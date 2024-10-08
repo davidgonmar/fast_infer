@@ -42,7 +42,7 @@ def check_all_close_or_print(out1, out2, atol, name):
         raise AssertionError("Outputs do not match for " + name)
 
 
-def _test_decoder_forward():
+def test_decoder_forward():
     D_MODEL = 8 * 64
     N_Q_HEADS = 32
     N_KV_HEADS = 8
@@ -83,8 +83,8 @@ def _test_decoder_forward():
 
     mask = np.ones((BSIZE, SEQ_LEN, SEQ_LEN)).astype(np.float32)
     # tril
-    mask = np.triu(mask) * -1e9
-    params = fi_fn.init(rng, input, mask)
+    mask = np.triu(mask) * 4 + np.eye(SEQ_LEN) * 10
+    params = fi_fn.init(rng, input, mask, None, 0)
 
     # tie the weights
     params["params"]["Attention_0"]["wq"] = jnp.array(
@@ -128,9 +128,9 @@ def _test_decoder_forward():
         .numpy()
     )
 
-    custom_outs = fi_fn.apply(params, input, mask)
+    custom_outs = fi_fn.apply(params, input, mask, None, 0)
 
-    check_all_close_or_print(hf_outs, custom_outs, atol=1e-3, name="Attention forward")
+    check_all_close_or_print(hf_outs, custom_outs, atol=1e-3, name="Decoder forward")
 
 
 def test_model_forward():
@@ -140,7 +140,7 @@ def test_model_forward():
     D_K = D_MODEL // N_Q_HEADS
     D_V = D_MODEL // N_Q_HEADS
     SEQ_LEN = 44
-    BSIZE = 4
+    BSIZE = 1
     config = FastInferLlamaConfig(
         n_q_heads=N_Q_HEADS,
         n_kv_heads=N_KV_HEADS,
@@ -167,20 +167,24 @@ def test_model_forward():
     )
 
     # shape of x is (batch_size, seq_len)
-    x = jax.random.normal(jax.random.PRNGKey(0), (BSIZE, SEQ_LEN)).astype(jnp.int32)
+    x = jax.random.randint(jax.random.PRNGKey(0), (BSIZE, SEQ_LEN), 0, 127).astype(
+        jnp.int32
+    )
 
     attn_mask = jnp.ones((BSIZE, SEQ_LEN, SEQ_LEN))
+    attn_mask = -jnp.triu(attn_mask, k=1) * 0.44 + -jnp.eye(SEQ_LEN) * 0.3
 
-    params = fi_fn.init(jax.random.PRNGKey(0), x, attn_mask)
+    params = fi_fn.init(jax.random.PRNGKey(0), x, attn_mask, None, 0)
 
     torch_state_dict = hf_fn.state_dict()
 
     params["params"]["Embed_0"]["embedding"] = jnp.array(
-        torch_state_dict["model.embed_tokens.weight"].T.detach().numpy()
+        torch_state_dict["model.embed_tokens.weight"].detach().numpy()
     )
     params["params"]["RMSNorm_0"]["scale"] = jnp.array(
         torch_state_dict["model.norm.weight"].detach().numpy()
     )
+
     params["params"]["lm_head"] = jnp.array(
         torch_state_dict["lm_head.weight"].T.detach().numpy()
     )
@@ -210,6 +214,7 @@ def test_model_forward():
         params["params"][f"LlamaDecoderLayer_{i}"]["MLP_0"]["up_proj"] = jnp.array(
             torch_state_dict[f"model.layers.{i}.mlp.up_proj.weight"].T.detach().numpy()
         )
+
         params["params"][f"LlamaDecoderLayer_{i}"]["MLP_0"]["gate_proj"] = jnp.array(
             torch_state_dict[f"model.layers.{i}.mlp.gate_proj.weight"]
             .T.detach()
@@ -220,7 +225,6 @@ def test_model_forward():
             .T.detach()
             .numpy()
         )
-
         params["params"][f"LlamaDecoderLayer_{i}"]["RMSNorm_0"]["scale"] = jnp.array(
             torch_state_dict[f"model.layers.{i}.input_layernorm.weight"]
             .detach()
@@ -231,3 +235,20 @@ def test_model_forward():
             .detach()
             .numpy()
         )
+
+    hf_outs = (
+        hf_fn(
+            torch.tensor(np.array(x)),
+            attention_mask=torch.tensor(np.array(attn_mask)[:, None, ...]),
+            position_ids=torch.arange(SEQ_LEN)
+            .unsqueeze(0)
+            .expand(BSIZE, SEQ_LEN)
+            .long(),
+        )[0]
+        .detach()
+        .numpy()
+    )
+
+    custom_outs, _ = fi_fn.apply(params, x, attn_mask, None, 0)
+
+    check_all_close_or_print(hf_outs, custom_outs, atol=1e-2, name="Model forward")
