@@ -153,7 +153,7 @@ def llama(model_name) -> tuple:
 
 class Sampler:
     def __init__(
-        self, model, params, tok, cfg, max_len, params_dtype=jnp.float16, use_cache=True
+        self, model, params, tok, cfg, max_len, params_dtype=jnp.float32, use_cache=True
     ):
         self.model = model
         self.params = params
@@ -164,7 +164,7 @@ class Sampler:
                 AttentionConfig(**cfg.to_dict()),
                 layer_names=layer_names,
                 bs=1,
-                max_len=256,
+                max_len=max_len,
             )
             if use_cache
             else None
@@ -185,7 +185,8 @@ class Sampler:
         end_token = self.tok.eos_token_id
         curr_pos = jnp.array(0)
         causal_mask = jnp.triu(jnp.ones((1, max_len, max_len)) * -1e12, k=1)
-        for i in range(max_len):
+        actual_pos = 0
+        while True:
             res, self.cache = self.jitted_apply(
                 self.params,
                 acc if self.cache is None else inp,
@@ -201,10 +202,16 @@ class Sampler:
             if next_token == end_token:
                 print("[INFO] Found end token. Stopping.")
                 break
-            if i == 0:
+            if actual_pos == 0:
                 curr_pos = jnp.array(acc.shape[1] - 1)
+            elif curr_pos < max_len:
+                curr_pos = jnp.array(curr_pos + 1)
             else:
-                curr_pos += 1
+                # TODO
+                break
+                # shift cache but do not update curr_pos
+                self.cache.roll(1)
+            actual_pos += 1
             print(self.tok.decode(acc[0]), end="", flush=True)
         return self.tok.decode(acc[0])
 
@@ -215,5 +222,5 @@ if __name__ == "__main__":
     )
     formatted_prompt = f"### Human: {prompt} ### Assistant:"
     model, tok, params, cfg = llama("PY007/TinyLlama-1.1B-Chat-v0.1")
-    sampler = Sampler(model, params, tok, cfg, 1024, use_cache=True)
+    sampler = Sampler(model, params, tok, cfg, 128, use_cache=True)
     print(sampler.sample(formatted_prompt))

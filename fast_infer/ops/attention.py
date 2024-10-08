@@ -75,6 +75,16 @@ class AttentionCache:
 
         return leaves, aux_data
 
+    def roll(self, n):
+        # used for shifting the cache
+        for layer_name in self._cache:
+            self._cache[layer_name]["key"] = jnp.roll(
+                self._cache[layer_name]["key"], n, axis=2
+            )
+            self._cache[layer_name]["value"] = jnp.roll(
+                self._cache[layer_name]["value"], n, axis=2
+            )
+
     @staticmethod
     def unflatten(aux_data, children):
         obj = AttentionCache(
